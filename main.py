@@ -31,13 +31,20 @@ def fetch_box_office(target_dt: str):
     실패 시: (False, "사용자에게 보여줄 한국어 안내 메시지")
     """
     # 인증키는 코드에 직접 쓰지 않고, Streamlit의 비밀 금고(secrets)에서 불러옵니다.
-    try:
-        api_key = st.secrets["KOBIS_KEY"]
-    except Exception:
+    # secrets 자체가 비어 있는 경우와, KOBIS_KEY 항목만 없는 경우를 구분해서 안내합니다.
+    if "KOBIS_KEY" not in st.secrets:
         return False, (
-            "인증키(KOBIS_KEY)를 찾을 수 없습니다. "
-            "Streamlit Cloud의 앱 설정 → Secrets 메뉴에서 KOBIS_KEY 값을 등록했는지 확인해 주세요."
+            "인증키(KOBIS_KEY)를 찾을 수 없습니다. Streamlit Cloud 앱 화면 오른쪽 아래 "
+            "'Manage app' → 점 세 개 메뉴 → 'Settings' → 'Secrets'로 들어가서 다음과 같이 "
+            "정확히 등록했는지 확인해 주세요 (따옴표 포함):\n\n"
+            'KOBIS_KEY = "발급받은_인증키"\n\n'
+            "등록/수정 후에는 저장 버튼을 누르고 앱이 자동으로 재시작될 때까지 잠시 기다려 주세요. "
+            "재시작이 안 되면 'Manage app' 메뉴에서 'Reboot app'을 눌러 주세요."
         )
+
+    api_key = st.secrets["KOBIS_KEY"]
+    if not str(api_key).strip():
+        return False, "KOBIS_KEY 값이 비어 있습니다. Secrets 메뉴에서 인증키 값을 다시 입력해 주세요."
 
     params = {"key": api_key, "targetDt": target_dt}
 
