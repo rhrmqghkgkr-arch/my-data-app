@@ -7,16 +7,33 @@ from zoneinfo import ZoneInfo
 # ──────────────────────────────────────────────
 # 기본 설정
 # ──────────────────────────────────────────────
-st.set_page_config(page_title="어제의 박스오피스", page_icon="🎬", layout="wide")
+st.set_page_config(page_title="날짜별 박스오피스", page_icon="🎬", layout="wide")
 
 API_URL = "https://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchDailyBoxOfficeList.json"
 
-# 한국 시간(KST) 기준으로 '어제' 날짜를 계산합니다.
+# 한국 시간(KST) 기준의 '오늘'과 '어제' 날짜를 계산합니다.
 # 배포 서버의 시계가 한국 시간이 아닐 수 있으므로, 반드시 시간대를 명시해서 계산합니다.
-def get_yesterday_kst() -> str:
-    kst_now = datetime.now(ZoneInfo("Asia/Seoul"))
-    yesterday = kst_now - timedelta(days=1)
-    return yesterday.strftime("%Y%m%d")  # yyyymmdd 형식
+def get_today_kst_date():
+    return datetime.now(ZoneInfo("Asia/Seoul")).date()
+
+
+def get_yesterday_kst_date():
+    return get_today_kst_date() - timedelta(days=1)
+
+
+# 누적관객 100만 명 이상이면 영화명 옆에 붙일 트로피 이모지 기준값
+TROPHY_THRESHOLD = 1_000_000
+
+
+def format_rank_change(inten):
+    """rankInten(전날 대비 순위 증감)을 색깔이 있는 화살표 HTML로 바꿔줍니다.
+    양수(순위 상승) → 빨간 위 화살표, 음수(순위 하락) → 파란 아래 화살표, 0 → 변동 없음."""
+    if pd.isna(inten) or int(inten) == 0:
+        return '<span style="color:#888;">-</span>'
+    inten = int(inten)
+    if inten > 0:
+        return f'<span style="color:red;">▲{inten}</span>'
+    return f'<span style="color:blue;">▼{abs(inten)}</span>'
 
 
 # ──────────────────────────────────────────────
@@ -81,10 +98,7 @@ def fetch_box_office(target_dt: str):
 
     # 6) 영화 목록이 비어 있는 경우 (예: 아직 집계되지 않은 날짜를 조회한 경우)
     if not movie_list:
-        return False, (
-            "해당 날짜의 박스오피스 데이터가 없습니다. "
-            "아직 집계가 완료되지 않았을 수 있으니 잠시 후 다시 시도해 주세요."
-        )
+        return False, "그날은 아직 집계 전입니다."
 
     df = pd.DataFrame(movie_list)
 
@@ -101,11 +115,21 @@ def fetch_box_office(target_dt: str):
 # ──────────────────────────────────────────────
 # 화면 구성
 # ──────────────────────────────────────────────
-st.title("🎬 어제의 박스오피스")
+st.title("🎬 날짜별 박스오피스")
 
-target_dt = get_yesterday_kst()
+yesterday_kst = get_yesterday_kst_date()
+
+# 달력에서 날짜를 고를 수 있게 합니다. 오늘 건 아직 집계 전이므로
+# 고를 수 있는 가장 늦은 날짜는 '어제(한국 시간 기준)'로 제한합니다.
+selected_date = st.date_input(
+    "조회할 날짜를 선택하세요",
+    value=yesterday_kst,
+    max_value=yesterday_kst,
+)
+
+target_dt = selected_date.strftime("%Y%m%d")
 display_date = f"{target_dt[:4]}년 {target_dt[4:6]}월 {target_dt[6:]}일"
-st.caption(f"조회 날짜: {display_date} (한국 시간 기준 어제)")
+st.caption(f"조회 날짜: {display_date}")
 
 ok, result = fetch_box_office(target_dt)
 
@@ -127,10 +151,50 @@ else:
     st.divider()
 
     # ── 전체 순위 표 ──
+    # 색깔 화살표와 트로피 이모지를 붙이기 위해 직접 HTML 표로 만듭니다.
     st.subheader("📋 전체 순위")
-    table_df = df[["rank", "movieNm", "openDt", "audiCnt", "audiAcc", "scrnCnt"]].copy()
-    table_df.columns = ["순위", "영화명", "개봉일", "관객수", "누적관객", "스크린수"]
-    st.dataframe(table_df, use_container_width=True, hide_index=True)
+
+    rows_html = ""
+    for _, row in df.iterrows():
+        movie_name = row["movieNm"]
+        # 누적관객 100만 명 이상이면 영화명 옆에 트로피 이모지를 붙입니다.
+        if pd.notna(row.get("audiAcc")) and row["audiAcc"] >= TROPHY_THRESHOLD:
+            movie_name = f"{movie_name} 🏆"
+
+        rank_change = format_rank_change(row.get("rankInten"))
+
+        rows_html += (
+            "<tr style='border-bottom:1px solid #eee;'>"
+            f"<td style='text-align:center; padding:6px;'>{int(row['rank'])}</td>"
+            f"<td style='padding:6px;'>{movie_name}</td>"
+            f"<td style='text-align:center; padding:6px;'>{rank_change}</td>"
+            f"<td style='text-align:center; padding:6px;'>{row.get('openDt', '')}</td>"
+            f"<td style='text-align:right; padding:6px;'>{int(row['audiCnt']):,}</td>"
+            f"<td style='text-align:right; padding:6px;'>{int(row['audiAcc']):,}</td>"
+            f"<td style='text-align:right; padding:6px;'>{int(row['scrnCnt']):,}</td>"
+            "</tr>"
+        )
+
+    table_html = f"""
+    <table style="width:100%; border-collapse:collapse;">
+        <thead>
+            <tr style="border-bottom:2px solid #ddd;">
+                <th style="text-align:center; padding:6px;">순위</th>
+                <th style="text-align:left; padding:6px;">영화명</th>
+                <th style="text-align:center; padding:6px;">전일대비</th>
+                <th style="text-align:center; padding:6px;">개봉일</th>
+                <th style="text-align:right; padding:6px;">관객수</th>
+                <th style="text-align:right; padding:6px;">누적관객</th>
+                <th style="text-align:right; padding:6px;">스크린수</th>
+            </tr>
+        </thead>
+        <tbody>
+            {rows_html}
+        </tbody>
+    </table>
+    """
+    st.markdown(table_html, unsafe_allow_html=True)
+    st.caption("전일대비: 🔺빨강 = 순위 상승 · 🔻파랑 = 순위 하락 · 🏆 = 누적관객 100만 명 이상")
 
     st.divider()
 
